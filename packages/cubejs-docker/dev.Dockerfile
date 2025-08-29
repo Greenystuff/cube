@@ -40,13 +40,12 @@ RUN yarn lerna run build \
   --ignore @cubejs-playground/* \
   --stream --no-prefix
 
-# 🔴 Build explicite du CLI (dossier: packages/cubejs-cli, workspace: @cubejs-backend/cli)
-RUN yarn workspace @cubejs-backend/cli build
+# 🔴 Build explicite du CLI par chemin (workspace name non fiable)
+RUN yarn --cwd packages/cubejs-cli build
 
 # ✅ Garde-fou : échoue si le dist du CLI n'existe pas
 RUN test -f packages/cubejs-cli/dist/src/index.js || \
   (echo 'ERROR: packages/cubejs-cli/dist/src/index.js manquant (CLI non buildé)'; exit 1)
-
 
 # ---------------- Runtime ----------------
 FROM node:22.18.0-bookworm-slim AS runtime
