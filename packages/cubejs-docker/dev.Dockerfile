@@ -186,8 +186,8 @@ RUN apt-get update \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Artefacts du build + deps prod
-COPY --from=build            /cubejs /cubejs
-COPY --from=prod_dependencies/cubejs /cubejs
+COPY --from=build /cubejs /cubejs
+COPY --from=prod_dependencies /cubejs /cubejs
 
 # Binaire cubejs + liens utiles
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
