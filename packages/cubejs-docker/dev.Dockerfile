@@ -167,7 +167,13 @@ COPY packages/cubejs-client-ws-transport/ packages/cubejs-client-ws-transport/
 COPY packages/cubejs-playground/ packages/cubejs-playground/
 
 RUN yarn build
-RUN yarn lerna run build
+# Build uniquement les paquets backend (+ leurs dépendances), on ignore les clients front
+RUN yarn lerna run build \
+  --scope @cubejs-backend/* \
+  --include-dependencies \
+  --ignore @cubejs-client/* \
+  --ignore @cubejs-playground/* \
+  --stream --no-prefix
 
 RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
 

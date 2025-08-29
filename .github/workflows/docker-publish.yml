@@ -1,8 +1,8 @@
-name: Build & Publish custom Cube image
+name: Build & Publish custom Cube image (from source)
 
 on:
   push:
-    branches: [ pre_agg_obervables ]   # ta branche
+    branches: [ pre_agg_obervables ]
   workflow_dispatch:
 
 concurrency:
@@ -23,13 +23,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 🔒 Force l’usage du Dockerfile de prod (pas le dev)
-      - name: Set build context
+      - name: Debug repo layout (optional)
         run: |
-          echo "DOCKERFILE_PATH=packages/cubejs-docker/Dockerfile" >> $GITHUB_ENV
-          echo "BUILD_CONTEXT=." >> $GITHUB_ENV
+          echo "PWD=$(pwd)"
+          ls -la
+          echo "--- cubejs-docker ---"
+          ls -la cubejs-docker || true
 
-      - name: Set up Buildx
+      - name: Setup Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
@@ -50,17 +51,17 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=Cube custom (from source)
 
-      # 🧱 Build & push single-arch (linux/amd64) avec le Dockerfile de prod
-      - name: Build & Push
+      # Build complet depuis le dev.Dockerfile (contexte = racine du repo)
+      - name: Build & Push (amd64)
         uses: docker/build-push-action@v6
         with:
-          context: ${{ env.BUILD_CONTEXT }}
-          file: ${{ env.DOCKERFILE_PATH }}
+          context: .
+          file: cubejs-docker/dev.Dockerfile
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 👉 Si tu veux accélérer les builds suivants
           cache-from: type=gha
           cache-to: type=gha,mode=max
