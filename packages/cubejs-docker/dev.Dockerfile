@@ -1,5 +1,5 @@
 # packages/cubejs-docker/dev.Dockerfile
-# Build "classique" depuis les sources (sans lister les paquets)
+# Build "classique" depuis les sources, avec build explicite du CLI
 
 FROM node:22.18.0-bookworm-slim AS build
 
@@ -29,8 +29,24 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 # Install complète AVEC scripts (postinstall cubestore, databricks, etc.)
 RUN yarn install --frozen-lockfile
 
-# Build du monorepo (comme en release). Si tu veux rester 100% “dev” tu peux commenter.
-RUN yarn build
+# (Optionnel) Build global du monorepo
+RUN yarn build || true
+
+# Build des packages backend seulement (évite les clients front)
+RUN yarn lerna run build \
+  --scope @cubejs-backend/* \
+  --include-dependencies \
+  --ignore @cubejs-client/* \
+  --ignore @cubejs-playground/* \
+  --stream --no-prefix
+
+# 🔴 Build explicite du CLI (dossier: packages/cubejs-cli, workspace: @cubejs-backend/cli)
+RUN yarn workspace @cubejs-backend/cli build
+
+# ✅ Garde-fou : échoue si le dist du CLI n'existe pas
+RUN test -f packages/cubejs-cli/dist/src/index.js || \
+  (echo 'ERROR: packages/cubejs-cli/dist/src/index.js manquant (CLI non buildé)'; exit 1)
+
 
 # ---------------- Runtime ----------------
 FROM node:22.18.0-bookworm-slim AS runtime
@@ -43,10 +59,10 @@ RUN set -eux; \
 
 WORKDIR /cubejs
 
-# On prend les artefacts buildés + node_modules
+# On prend tout (sources + artefacts + node_modules) depuis le stage build
 COPY --from=build /src /cubejs
 
-# Entrypoint DEV (ne pas utiliser le binaire prod)
+# Entrypoint DEV (on lance cubejs-dev)
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs-dev
 RUN chmod +x /usr/local/bin/cubejs-dev
 
@@ -59,5 +75,5 @@ RUN ln -s /cubejs/packages/cubejs-docker /cube || true
 WORKDIR /cube/conf
 EXPOSE 4000
 
-# IMPORTANT: utiliser cubejs-dev (et pas cubejs)
+# IMPORTANT: utiliser cubejs-dev (et pas cubejs prod)
 CMD ["cubejs-dev", "server"]
