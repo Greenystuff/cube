@@ -53,6 +53,7 @@ RUN set -eux; \
 RUN yarn build || true
 
 # Build des packages backend seulement (évite les clients front lourds)
+# ⚠️ IMPORTANT: on RETIRE --include-dependencies pour ne pas builder api-gateway/playground
 RUN yarn lerna run build \
   --scope @cubejs-backend/* \
   --ignore @cubejs-backend/api-gateway \
@@ -65,7 +66,6 @@ RUN if [ ! -f packages/cubejs-cli/dist/src/index.js ]; then \
       echo "Building cubejs-cli explicitly..."; \
       yarn --cwd packages/cubejs-cli build; \
     fi
-
 
 # ---------------- Runtime ----------------
 FROM node:22.18.0-bookworm-slim AS runtime
