@@ -55,10 +55,10 @@ RUN yarn build || true
 # Build des packages backend seulement (évite les clients front lourds)
 RUN yarn lerna run build \
   --scope @cubejs-backend/* \
-  --include-dependencies \
+  --ignore @cubejs-backend/api-gateway \
   --ignore @cubejs-client/* \
   --ignore @cubejs-playground/* \
-  --stream --no-prefix
+  --no-bail --stream --no-prefix
 
 # ✅ Garde-fou : si le dist du CLI n'existe pas, on (re)build le package cubejs-cli
 RUN if [ ! -f packages/cubejs-cli/dist/src/index.js ]; then \
