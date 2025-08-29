@@ -250,11 +250,17 @@ export class QueryOrchestrator {
     });
 
     // 2) Partitions & versions (présence => done), en respectant timezones / dataSources / preAggregations
-    const parts = await this.expandPartitionsInPreAggregations({
+    const expandedQuery = await this.expandPartitionsInPreAggregations({
       timezones,
       dataSources,
       preAggregations, // [{ id }]
     });
+
+    // Convertir les pré-agrégations étendues au format attendu par getPreAggregationVersionEntries
+    const parts = expandedQuery.preAggregations.map((preAgg: any) => ({
+      preAggregation: { preAggregation: preAgg },
+      partitions: [preAgg]
+    }));
 
     const versionEntries = await this.getPreAggregationVersionEntries(
       parts, // [{ preAggregation, partitions }]
@@ -262,16 +268,12 @@ export class QueryOrchestrator {
       requestId
     );
 
-    const doneStatuses = parts.map((p: any) => {
-      const hasAny = (p.partitions || []).some((part: any) => {
-        const arr =
-          versionEntries?.versionEntriesByTableName?.[part?.tableName] || [];
-        return Array.isArray(arr) && arr.length > 0;
-      });
+    const doneStatuses = expandedQuery.preAggregations.map((p: any) => {
+      const hasAny = versionEntries?.versionEntriesByTableName?.[p?.tableName] || [];
       return {
-        status: hasAny ? "done" : "not_built",
-        dataSource: p?.preAggregation?.preAggregation?.dataSource,
-        preAggregationId: p?.preAggregation?.preAggregation?.id,
+        status: Array.isArray(hasAny) && hasAny.length > 0 ? "done" : "not_built",
+        dataSource: p?.dataSource,
+        preAggregationId: p?.preAggregationId,
       };
     });
 
