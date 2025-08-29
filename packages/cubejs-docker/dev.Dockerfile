@@ -1,3 +1,4 @@
+# packages/cubejs-docker/dev.Dockerfile
 FROM node:22.18.0-bookworm-slim AS base
 
 ARG IMAGE_VERSION=dev
@@ -6,15 +7,13 @@ ENV CUBEJS_DOCKER_IMAGE_VERSION=$IMAGE_VERSION
 ENV CUBEJS_DOCKER_IMAGE_TAG=dev
 ENV CI=0
 
-# Outils build et JDK (cubestore/cubesql)
 RUN DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-       libssl3 curl gcc g++ make cmake python3 python3.11 libpython3.11-dev \
-       openjdk-17-jdk-headless \
+       libssl3 curl cmake python3 python3.11 libpython3.11-dev gcc g++ make openjdk-17-jdk-headless \
     && rm -rf /var/lib/apt/lists/*
 
-# Rust toolchain (cubestore/cubesql)
+# Rust toolchain (pour cubestore/cubesql)
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
@@ -26,20 +25,20 @@ ENV NODE_ENV=development
 
 WORKDIR /cubejs
 
-# Fichiers racine du monorepo
-COPY package.json ./
-COPY lerna.json ./
-COPY yarn.lock ./
-COPY tsconfig.base.json ./
-COPY rollup.config.js ./
+# Fichiers racine
+COPY package.json .
+COPY lerna.json .
+COPY yarn.lock .
+COPY tsconfig.base.json .
+COPY rollup.config.js .
+
+# Linter (utilisé par certains scripts)
 COPY packages/cubejs-linter packages/cubejs-linter
 
-# --- Packages: phase package.json pour optimiser l'installation ---
-# Backend (liste complète)
+# Déclarer tous les package.json aux workspaces pour un install rapide
+# (backend)
 COPY rust/cubesql/package.json rust/cubesql/package.json
 COPY rust/cubestore/package.json rust/cubestore/package.json
-COPY rust/cubestore/bin rust/cubestore/bin
-
 COPY packages/cubejs-backend-shared/package.json packages/cubejs-backend-shared/package.json
 COPY packages/cubejs-base-driver/package.json packages/cubejs-base-driver/package.json
 COPY packages/cubejs-backend-native/package.json packages/cubejs-backend-native/package.json
@@ -79,8 +78,7 @@ COPY packages/cubejs-ksql-driver/package.json packages/cubejs-ksql-driver/packag
 COPY packages/cubejs-dbt-schema-extension/package.json packages/cubejs-dbt-schema-extension/package.json
 COPY packages/cubejs-jdbc-driver/package.json packages/cubejs-jdbc-driver/package.json
 COPY packages/cubejs-vertica-driver/package.json packages/cubejs-vertica-driver/package.json
-
-# Front (package.json seulement – on ne va pas les builder)
+# Front (déclarés mais on ne les build PAS)
 COPY packages/cubejs-templates/package.json packages/cubejs-templates/package.json
 COPY packages/cubejs-client-core/package.json packages/cubejs-client-core/package.json
 COPY packages/cubejs-client-react/package.json packages/cubejs-client-react/package.json
@@ -90,108 +88,71 @@ COPY packages/cubejs-client-ngx/package.json packages/cubejs-client-ngx/package.
 COPY packages/cubejs-client-ws-transport/package.json packages/cubejs-client-ws-transport/package.json
 COPY packages/cubejs-playground/package.json packages/cubejs-playground/package.json
 
-# Yarn v1 stable + timeouts plus souples
-RUN yarn policies set-version v1.22.22
-RUN yarn config set network-timeout 120000 -g
+RUN yarn policies set-version v1.22.22 \
+ && yarn config set network-timeout 120000 -g
 
-# Dépendances prod pour le driver Databricks JDBC
+# --- Prod deps (jdbc databricks) pour l’image finale ---
 FROM base AS prod_base_dependencies
 COPY packages/cubejs-databricks-jdbc-driver/package.json packages/cubejs-databricks-jdbc-driver/package.json
 RUN mkdir -p packages/cubejs-databricks-jdbc-driver/bin \
  && echo '#!/usr/bin/env node' > packages/cubejs-databricks-jdbc-driver/bin/post-install \
+ && chmod +x packages/cubejs-databricks-jdbc-driver/bin/post-install \
  && yarn install --prod
 
 FROM prod_base_dependencies AS prod_dependencies
 COPY packages/cubejs-databricks-jdbc-driver/bin packages/cubejs-databricks-jdbc-driver/bin
 RUN yarn install --prod --ignore-scripts
 
-# -------- Build (backend only) ----------
+# --- Build (backend only) ---
 FROM base AS build
 
-# Installe toutes les deps (monorepo)
 RUN yarn install
 
-# Code source complet
+# Copier **les sources** maintenant (pas juste les package.json)
 COPY rust/cubestore/ rust/cubestore/
 COPY rust/cubesql/   rust/cubesql/
+COPY packages/       packages/
 
-COPY packages/cubejs-backend-shared/      packages/cubejs-backend-shared/
-COPY packages/cubejs-base-driver/         packages/cubejs-base-driver/
-COPY packages/cubejs-backend-native/      packages/cubejs-backend-native/
-COPY packages/cubejs-testing-shared/      packages/cubejs-testing-shared/
-COPY packages/cubejs-backend-cloud/       packages/cubejs-backend-cloud/
-COPY packages/cubejs-api-gateway/         packages/cubejs-api-gateway/
-COPY packages/cubejs-athena-driver/       packages/cubejs-athena-driver/
-COPY packages/cubejs-bigquery-driver/     packages/cubejs-bigquery-driver/
-COPY packages/cubejs-cli/                 packages/cubejs-cli/
-COPY packages/cubejs-clickhouse-driver/   packages/cubejs-clickhouse-driver/
-COPY packages/cubejs-crate-driver/        packages/cubejs-crate-driver/
-COPY packages/cubejs-dremio-driver/       packages/cubejs-dremio-driver/
-COPY packages/cubejs-druid-driver/        packages/cubejs-druid-driver/
-COPY packages/cubejs-duckdb-driver/       packages/cubejs-duckdb-driver/
-COPY packages/cubejs-elasticsearch-driver/ packages/cubejs-elasticsearch-driver/
-COPY packages/cubejs-firebolt-driver/     packages/cubejs-firebolt-driver/
-COPY packages/cubejs-hive-driver/         packages/cubejs-hive-driver/
-COPY packages/cubejs-mongobi-driver/      packages/cubejs-mongobi-driver/
-COPY packages/cubejs-mssql-driver/        packages/cubejs-mssql-driver/
-COPY packages/cubejs-mysql-driver/        packages/cubejs-mysql-driver/
-COPY packages/cubejs-cubestore-driver/    packages/cubejs-cubestore-driver/
-COPY packages/cubejs-oracle-driver/       packages/cubejs-oracle-driver/
-COPY packages/cubejs-redshift-driver/     packages/cubejs-redshift-driver/
-COPY packages/cubejs-postgres-driver/     packages/cubejs-postgres-driver/
-COPY packages/cubejs-questdb-driver/      packages/cubejs-questdb-driver/
-COPY packages/cubejs-materialize-driver/  packages/cubejs-materialize-driver/
-COPY packages/cubejs-prestodb-driver/     packages/cubejs-prestodb-driver/
-COPY packages/cubejs-trino-driver/        packages/cubejs-trino-driver/
-COPY packages/cubejs-pinot-driver/        packages/cubejs-pinot-driver/
-COPY packages/cubejs-query-orchestrator/  packages/cubejs-query-orchestrator/
-COPY packages/cubejs-schema-compiler/     packages/cubejs-schema-compiler/
-COPY packages/cubejs-server/              packages/cubejs-server/
-COPY packages/cubejs-server-core/         packages/cubejs-server-core/
-COPY packages/cubejs-snowflake-driver/    packages/cubejs-snowflake-driver/
-COPY packages/cubejs-sqlite-driver/       packages/cubejs-sqlite-driver/
-COPY packages/cubejs-ksql-driver/         packages/cubejs-ksql-driver/
-COPY packages/cubejs-dbt-schema-extension/ packages/cubejs-dbt-schema-extension/
-COPY packages/cubejs-jdbc-driver/         packages/cubejs-jdbc-driver/
-COPY packages/cubejs-databricks-jdbc-driver/ packages/cubejs-databricks-jdbc-driver/
-COPY packages/cubejs-vertica-driver/      packages/cubejs-vertica-driver/
-
-# (on n'a pas besoin de copier le code des clients)
-
-# IMPORTANT : construire uniquement le backend (+deps)
-# (pas de 'yarn build' global ici)
+# ⚠️ NE PAS lancer `yarn build` (build monorepo complet -> clients/Angular cassent)
+# Build sélectif backend + deps, on ignore tous les clients & playground & templates
 RUN yarn lerna run build \
-  --scope @cubejs-backend/* \
   --include-dependencies \
-  --ignore @cubejs-client/* \
-  --ignore @cubejs-playground/* \
-  --stream --no-prefix
+  --stream --no-prefix \
+  --scope '@cubejs-backend/*' \
+  --scope '@cubejs-*-driver' \
+  --scope '@cubejs-query-orchestrator' \
+  --scope '@cubejs-schema-compiler' \
+  --scope '@cubejs-server' \
+  --scope '@cubejs-server-core' \
+  --ignore '@cubejs-client*' \
+  --ignore '@cubejs-playground*' \
+  --ignore '@cubejs-templates' \
+  --ignore '@cubejs-kit*'
 
-# Allège l'image intermédiaire
-RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
+# alléger l’artefact
+RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' + || true
 
-# -------- Image finale ----------
+# --- Image finale ---
 FROM base AS final
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates python3.11 libpython3.11-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends ca-certificates python3.11 libpython3.11-dev \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build            /cubejs ./
-COPY --from=prod_dependencies /cubejs ./
+COPY --from=build            /cubejs /cubejs
+COPY --from=prod_dependencies /cubejs /cubejs
 
-# Entrypoints utilitaires
+# binaire d’entrée
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
+RUN chmod +x /usr/local/bin/cubejs
 
-# Node module resolution
+# PATH & liens utiles
 ENV NODE_PATH=/cube/conf/node_modules:/cube/node_modules
 ENV PYTHONUNBUFFERED=1
-
-# Liens utiles
-RUN ln -s  /cubejs/packages/cubejs-docker /cube \
- && ln -s  /cubejs/rust/cubestore/bin/cubestore-dev /usr/local/bin/cubestore-dev
+RUN ln -s /cubejs/packages/cubejs-docker /cube \
+ && ln -s /cubejs/rust/cubestore/bin/cubestore-dev /usr/local/bin/cubestore-dev
 
 WORKDIR /cube/conf
 EXPOSE 4000
