@@ -23,17 +23,15 @@ WORKDIR /src
 COPY . .
 
 # --- Yarn 3 (Corepack) ---
-# On active Corepack et on s'assure d'utiliser exactement Yarn 3.6.4
 RUN corepack enable && corepack prepare yarn@3.6.4 --activate
-# (optionnel) Timeout réseau global Yarn 3
-RUN yarn config set --home networkTimeout 120000
+# (si ton package.json a déjà "packageManager": "yarn@3.6.4", Corepack utilisera cette version)
 
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
 # Vérification de la version -> doit afficher 3.6.4
 RUN yarn --version
 
-# Install stricte (équivalent de --frozen-lockfile pour Yarn moderne)
+# Install stricte (équivalent --frozen-lockfile)
 RUN yarn install --immutable
 
 # (Optionnel) Build global du monorepo (lerna/Nx)
