@@ -1,5 +1,5 @@
 # packages/cubejs-docker/dev.Dockerfile
-# Build "classique" depuis les sources, orienté backend + CLI
+# Build "classique" depuis les sources (sans lister les paquets)
 
 FROM node:22.18.0-bookworm-slim AS build
 
@@ -15,40 +15,22 @@ RUN set -eux; \
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
-
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- --profile minimal --default-toolchain nightly-2022-03-08 -y
 
 WORKDIR /src
 
-# On copie TOUT le repo (incl. rust/) pour que les postinstall trouvent leurs scripts
+# On copie TOUT le repo (les dossiers rust/ sont requis par les postinstall)
 COPY . .
 
-# Yarn v1 + timeout réseau (utile sur CI)
+# Yarn v1 + timeout réseau
 RUN yarn policies set-version v1.22.22 && yarn config set network-timeout 120000 -g
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
 # Install complète AVEC scripts (postinstall cubestore, databricks, etc.)
 RUN yarn install --frozen-lockfile
 
-# --- Build des packages backend uniquement (on évite les clients front qui peuvent casser) ---
-RUN yarn lerna run build \
-  --scope @cubejs-backend/* \
-  --include-dependencies \
-  --ignore @cubejs-client/* \
-  --ignore @cubejs-playground/* \
-  --stream --no-prefix
-
-# --- Build explicite du CLI pour garantir la présence du dist ---
-RUN yarn workspace @cubejs-backend/cli build
-
-# Garde-fou : échoue si le dist du CLI n'existe pas
-RUN test -f packages/cubejs-cli/dist/src/index.js || \
-  (echo 'ERROR: packages/cubejs-cli/dist/src/index.js manquant (CLI non buildé)'; exit 1)
-
-# Optionnel : petit nettoyage (sans casser les artefacts buildés)
-# (on ne supprime PAS les node_modules ici, on veut un runtime complet)
-# Si vous voulez affiner la taille, faites-le plutôt par prune sélectif.
-
+# Build du monorepo (comme en release). Si tu veux rester 100% “dev” tu peux commenter.
+RUN yarn build
 
 # ---------------- Runtime ----------------
 FROM node:22.18.0-bookworm-slim AS runtime
@@ -61,22 +43,21 @@ RUN set -eux; \
 
 WORKDIR /cubejs
 
-# On prend tout (sources + artefacts + node_modules) depuis le stage build
+# On prend les artefacts buildés + node_modules
 COPY --from=build /src /cubejs
 
-# Entrypoint (fourni par le repo)
-COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
-RUN chmod +x /usr/local/bin/cubejs
+# Entrypoint DEV (ne pas utiliser le binaire prod)
+COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs-dev
+RUN chmod +x /usr/local/bin/cubejs-dev
 
-# Liens/vars utiles (comme dans leurs images dev)
-ENV NODE_PATH=/cube/conf/node_modules:/cube/node_modules \
+# Quelques liens/vars utiles (comme dans leurs images)
+ENV NODE_ENV=development \
+    NODE_PATH=/cube/conf/node_modules:/cube/node_modules \
     PYTHONUNBUFFERED=1
-
-# Lien vers le dossier docker interne et vers le binaire cubestore-dev
-RUN ln -s /cubejs/packages/cubejs-docker /cube || true \
- && ln -s /cubejs/rust/cubestore/bin/cubestore-dev /usr/local/bin/cubestore-dev || true
+RUN ln -s /cubejs/packages/cubejs-docker /cube || true
 
 WORKDIR /cube/conf
 EXPOSE 4000
 
-CMD ["cubejs", "server"]
+# IMPORTANT: utiliser cubejs-dev (et pas cubejs)
+CMD ["cubejs-dev", "server"]
