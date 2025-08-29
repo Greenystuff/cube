@@ -551,6 +551,13 @@ the schema name dynamically depending on the security context.
 Defaults to `dev_pre_aggregations` in [development mode][ref-development-mode]
 and `prod_pre_aggregations` in production.
 
+<InfoBox>
+
+In Cube Cloud, all [environments][ref-environments] share the same pre-aggregations schema name by default.
+This allows reusing pre-aggregations across environments, saving both time and cost.
+
+</InfoBox>
+
 This configuration option can also be set using the `CUBEJS_PRE_AGGREGATIONS_SCHEMA`
 environment variable.
 
@@ -1393,7 +1400,7 @@ from cube import config
 
 @config('context_to_roles')
 def context_to_roles(ctx: dict) -> list[str]:
-  cloud_ctx = ctx['securityContext'].get('cloud', {'roles': []})
+  cloud_ctx = ctx['securityContext'].get('cubeCloud', {'roles': []})
   return cloud_ctx.get('roles', [])
 ```
 
@@ -1401,7 +1408,7 @@ def context_to_roles(ctx: dict) -> list[str]:
 
 module.exports = {
   contextToRoles: ({ securityContext }) => {
-    const cloud_ctx = securityContext.cloud || { roles: [] }
+    const cloud_ctx = securityContext.cubeCloud || { roles: [] }
     return cloud_ctx.roles || []
   }
 }
@@ -1543,3 +1550,4 @@ If not defined, Cube will lookup for environment variable
 [ref-dax-api]: /product/apis-integrations/dax-api
 [ref-mdx-api]: /product/apis-integrations/mdx-api
 [ref-ntlm]: /product/auth/methods/ntlm
+[ref-environments]: /product/workspace/environments
