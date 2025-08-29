@@ -23,42 +23,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # --- Diagnostic utile ---
-      - name: Debug repo layout
-        run: |
-          echo "PWD=$(pwd)"
-          ls -la
-          echo "---- cubejs-docker (root) ----"
-          ls -la cubejs-docker || true
-          echo "---- packages/cubejs-docker ----"
-          ls -la packages/cubejs-docker || true
-          echo "---- Cherche dev.Dockerfile partout (2 niveaux) ----"
-          find . -maxdepth 2 -name "dev.Dockerfile" -print || true
-
-      # --- Détection robuste du chemin du Dockerfile ---
-      - name: Detect dev.Dockerfile
-        id: detect
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f cubejs-docker/dev.Dockerfile ]; then
-            echo "DOCKERFILE_PATH=cubejs-docker/dev.Dockerfile" >> $GITHUB_ENV
-            echo "BUILD_CONTEXT=." >> $GITHUB_ENV
-            echo "Detected: cubejs-docker/dev.Dockerfile (root)"
-          elif [ -f packages/cubejs-docker/dev.Dockerfile ]; then
-            echo "DOCKERFILE_PATH=packages/cubejs-docker/dev.Dockerfile" >> $GITHUB_ENV
-            echo "BUILD_CONTEXT=." >> $GITHUB_ENV
-            echo "Detected: packages/cubejs-docker/dev.Dockerfile"
-          else
-            echo "::error::Aucun dev.Dockerfile trouvé (ni cubejs-docker/dev.Dockerfile ni packages/cubejs-docker/dev.Dockerfile)."
-            exit 1
-          fi
-          echo "Using DOCKERFILE_PATH=${DOCKERFILE_PATH}"
-          test -f "${DOCKERFILE_PATH}" || (echo "::error::Le fichier détecté n'existe pas"; exit 1)
-
-      # ⚠️ Assure-toi d'avoir patché dev.Dockerfile pour ne builder que le backend :
-      # RUN yarn lerna run build --scope @cubejs-backend/* --include-dependencies --ignore @cubejs-client/* --ignore @cubejs-playground/* --stream --no-prefix
-
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v3
 
