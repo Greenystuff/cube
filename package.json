@@ -75,5 +75,5 @@
     "thrift": "0.20.0"
   },
   "license": "MIT",
-  "packageManager": "yarn@1.22.19"
+  "packageManager": "yarn@3.6.4"
 }

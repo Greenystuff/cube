@@ -26,8 +26,9 @@ COPY . .
 RUN yarn policies set-version v1.22.22 && yarn config set network-timeout 120000 -g
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
-# Install complète AVEC scripts (postinstall cubestore, databricks, etc.)
-RUN yarn install --frozen-lockfile
+RUN corepack enable
+RUN yarn --version
+RUN yarn install --immutable
 
 # (Optionnel) Build global du monorepo (lerna/Nx)
 RUN yarn build || true
