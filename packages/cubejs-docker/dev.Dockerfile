@@ -1,5 +1,5 @@
 # packages/cubejs-docker/dev.Dockerfile
-# Build "classique" depuis les sources, avec build explicite du CLI
+# Build "classique" depuis les sources, avec garde-fou pour le CLI
 
 FROM node:22.18.0-bookworm-slim AS build
 
@@ -29,10 +29,10 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 # Install complète AVEC scripts (postinstall cubestore, databricks, etc.)
 RUN yarn install --frozen-lockfile
 
-# (Optionnel) Build global du monorepo
+# (Optionnel) Build global du monorepo (lerna/Nx)
 RUN yarn build || true
 
-# Build des packages backend seulement (évite les clients front)
+# Build des packages backend seulement (évite les clients front lourds)
 RUN yarn lerna run build \
   --scope @cubejs-backend/* \
   --include-dependencies \
@@ -40,12 +40,11 @@ RUN yarn lerna run build \
   --ignore @cubejs-playground/* \
   --stream --no-prefix
 
-# 🔴 Build explicite du CLI (dossier: packages/cubejs-cli, workspace: @cubejs-backend/cli)
-RUN yarn workspace @cubejs-backend/cli build
-
-# ✅ Garde-fou : échoue si le dist du CLI n'existe pas
-RUN test -f packages/cubejs-cli/dist/src/index.js || \
-  (echo 'ERROR: packages/cubejs-cli/dist/src/index.js manquant (CLI non buildé)'; exit 1)
+# ✅ Garde-fou : si le dist du CLI n'existe pas, on (re)build le package cubejs-cli
+RUN if [ ! -f packages/cubejs-cli/dist/src/index.js ]; then \
+      echo "Building cubejs-cli explicitly..."; \
+      yarn --cwd packages/cubejs-cli build; \
+    fi
 
 
 # ---------------- Runtime ----------------
@@ -59,15 +58,14 @@ RUN set -eux; \
 
 WORKDIR /cubejs
 
-# Pull everything we built
+# On prend tout (sources + artefacts + node_modules) depuis le stage build
 COPY --from=build /src /cubejs
 
-# Entrypoint
+# Entrypoint DEV (on lance cubejs-dev)
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs-dev
 RUN chmod +x /usr/local/bin/cubejs-dev
 
-# 🔧 Make image dependencies resolvable from your bind-mounted project (/cube/conf):
-# Node resolves modules by walking up from /cube/conf to /cube. Provide node_modules there.
+# 🔧 Rendez les deps de l'image visibles depuis ton projet bind-mounté (/cube/conf)
 RUN mkdir -p /cube \
   && ln -s /cubejs/node_modules /cube/node_modules \
   && ln -s /cubejs/packages/cubejs-docker /cube || true
@@ -78,4 +76,5 @@ ENV NODE_ENV=development \
 
 WORKDIR /cube/conf
 EXPOSE 4000
+
 CMD ["cubejs-dev", "server"]
