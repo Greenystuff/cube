@@ -66,12 +66,12 @@ jobs:
         with:
           images: ${{ env.DOCKERHUB_IMAGE }}
           tags: |
-            # tag permanent par commit
-            type=raw,value=sha-${{ github.sha }}
-            # tag latest uniquement sur la branche par défaut
+            type=ref,event=branch
+            type=sha
             type=raw,value=latest,enable={{is_default_branch}}
-            # tag PR utile pour tests éphémères
-            type=raw,value=pr-${{ github.event.pull_request.number }},enable={{is_pr}}
+          labels: |
+            org.opencontainers.image.source=${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Build & Push (multi-arch)
         uses: docker/build-push-action@v6
