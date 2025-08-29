@@ -2,7 +2,7 @@ name: Build & Publish custom Cube image
 
 on:
   push:
-    branches: [ pre_agg_obervables ]  # ajuste si besoin
+    branches: [ pre_agg_obervables ]
   workflow_dispatch:
 
 concurrency:
@@ -15,7 +15,6 @@ jobs:
     permissions:
       contents: read
     env:
-      # Nom du repo d'image sur Docker Hub (modifie "cube-custom" si tu veux)
       IMAGE_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/cube-custom
 
     steps:
@@ -24,28 +23,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Détecte le bon Dockerfile du monorepo Cube (prod en priorité)
-      - name: Detect Dockerfile
-        id: detect
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f packages/cubejs-docker/Dockerfile ]; then
-            echo "DOCKERFILE_PATH=packages/cubejs-docker/Dockerfile" >> $GITHUB_ENV
-            echo "BUILD_CONTEXT=." >> $GITHUB_ENV
-          elif [ -f packages/cubejs-docker/dev.Dockerfile ]; then
-            echo "DOCKERFILE_PATH=packages/cubejs-docker/dev.Dockerfile" >> $GITHUB_ENV
-            echo "BUILD_CONTEXT=." >> $GITHUB_ENV
-          else
-            echo "Aucun Dockerfile trouvé aux emplacements attendus."
-            echo "Contenu de packages/cubejs-docker/ s'il existe :"
-            ls -la packages/cubejs-docker/ || true
-            exit 1
-          fi
-          echo "Dockerfile retenu: ${DOCKERFILE_PATH}"
-          ls -la "${DOCKERFILE_PATH}"
-
-      - name: Set up QEMU (multi-arch possible plus tard)
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -62,7 +40,6 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: docker.io/${{ env.IMAGE_REPO }}
-          # Tags simples et robustes (branche, tag git, sha)
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -70,15 +47,18 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-      
-      - name: Build & Push
+            org.opencontainers.image.title=Cube custom (from source)
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+
+      - name: Build & Push (multi-arch)
         uses: docker/build-push-action@v6
         with:
-          context: ${{ env.BUILD_CONTEXT }}
-          file: ${{ env.DOCKERFILE_PATH }}
+          context: .
+          file: packages/cubejs-docker/dev.Dockerfile
           push: true
-          platforms: linux/amd64           # passe à "linux/amd64,linux/arm64" si tu veux du multi-arch
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: linux/amd64,linux/arm64
+          provenance: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
