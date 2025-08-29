@@ -13,6 +13,7 @@ import { QueryCache, QueryBody, TempTable, PreAggTableToTempTable, QueryWithPara
 import { PreAggregations, PreAggregationDescription, getLastUpdatedAtTimestamp } from './PreAggregations';
 import { DriverFactory, DriverFactoryByDataSource } from './DriverFactory';
 import { QueryStream } from './QueryStream';
+import { PreAggJobEvent } from "./QueryQueue";
 
 export type CacheAndQueryDriverType = 'memory' | 'cubestore' | /** removed, used for exception */ 'redis';
 
@@ -77,28 +78,39 @@ export class QueryOrchestrator {
     this.rollupOnlyMode = options.rollupOnlyMode;
     const cacheAndQueueDriver = detectQueueAndCacheDriver(options);
 
-    if (!['memory', 'cubestore'].includes(cacheAndQueueDriver)) {
+    if (!["memory", "cubestore"].includes(cacheAndQueueDriver)) {
       throw new Error(
         `Only 'cubestore' or 'memory' are supported for cacheAndQueueDriver option, passed: ${cacheAndQueueDriver}`
       );
     }
 
-    const { externalDriverFactory, continueWaitTimeout, skipExternalCacheAndQueue } = options;
+    const {
+      externalDriverFactory,
+      continueWaitTimeout,
+      skipExternalCacheAndQueue,
+    } = options;
 
     this.cacheAndQueueDriver = cacheAndQueueDriver;
 
-    const cubeStoreDriverFactory = cacheAndQueueDriver === 'cubestore' ? async () => {
-      if (externalDriverFactory) {
-        const externalDriver = await externalDriverFactory();
-        if (externalDriver instanceof CubeStoreDriver) {
-          return externalDriver;
-        }
+    const cubeStoreDriverFactory =
+      cacheAndQueueDriver === "cubestore"
+        ? async () => {
+            if (externalDriverFactory) {
+              const externalDriver = await externalDriverFactory();
+              if (externalDriver instanceof CubeStoreDriver) {
+                return externalDriver;
+              }
 
-        throw new Error('It`s not possible to use Cube Store as queue/cache driver without using it as external');
-      }
+              throw new Error(
+                "It`s not possible to use Cube Store as queue/cache driver without using it as external"
+              );
+            }
 
-      throw new Error('Cube Store was specified as queue/cache driver. Please set CUBEJS_CUBESTORE_HOST and CUBEJS_CUBESTORE_PORT variables. Please see https://cube.dev/docs/deployment/production-checklist#set-up-cube-store to learn more.');
-    } : undefined;
+            throw new Error(
+              "Cube Store was specified as queue/cache driver. Please set CUBEJS_CUBESTORE_HOST and CUBEJS_CUBESTORE_PORT variables. Please see https://cube.dev/docs/deployment/production-checklist#set-up-cube-store to learn more."
+            );
+          }
+        : undefined;
 
     this.queryCache = new QueryCache(
       this.redisPrefix,
@@ -144,9 +156,171 @@ export class QueryOrchestrator {
   }
 
   /**
+   * Subscribe to pre-aggregation job events (scheduled/processing/done/failure/canceled)
+   * emitted by the underlying QueryQueue for a given dataSource (default: 'default').
+   * Consumers (ton backend) peuvent relayer ça en SSE/WebSocket.
+   */
+  public async onPreAggregationJobEvent(
+    listener: (e: PreAggJobEvent) => void,
+    dataSource: string = "default"
+  ): Promise<void> {
+    const queue = await this.preAggregations.getQueue(dataSource);
+    // getPreAggJobEventBus() est exposé par QueryQueue.ts patché
+    if ((queue as any)?.getPreAggJobEventBus) {
+      (queue as any).getPreAggJobEventBus().on(listener);
+    }
+  }
+
+  /**
+   * Unsubscribe from pre-aggregation job events for a given dataSource (default: 'default').
+   */
+  public async offPreAggregationJobEvent(
+    listener: (e: PreAggJobEvent) => void,
+    dataSource: string = "default"
+  ): Promise<void> {
+    const queue = await this.preAggregations.getQueue(dataSource);
+    if ((queue as any)?.getPreAggJobEventBus) {
+      (queue as any).getPreAggJobEventBus().off(listener);
+    }
+  }
+
+  /**
+   * Build an exhaustive view of pre-aggregations status by combining:
+   * - current queue states (=> scheduled/processing)
+   * - existing version entries (=> done) via expandPartitionsInPreAggregations + getPreAggregationVersionEntries
+   * Anything else is considered not_built.
+   *
+   * NOTE: requires preAggregationsSchema (from compiler) & a requestId for tracing.
+   * Caller fournit timezones / dataSources / preAggregations (ids) selon son besoin.
+   */
+  public async listAllPreAggregationsWithStatus(params: {
+    timezones?: string[];
+    dataSources?: string[];
+    preAggregations?: { id: string }[];
+    preAggregationsSchema: string;
+    requestId: string;
+  }): Promise<
+    Array<{
+      status: "scheduled" | "processing" | "done" | "not_built";
+      dataSource?: string;
+      preAggregationId?: string;
+      tableName?: string;
+      requestId?: string;
+    }>
+  > {
+    const {
+      timezones,
+      dataSources = ["default"],
+      preAggregations,
+      preAggregationsSchema,
+      requestId,
+    } = params;
+
+    // 1) Queue states par dataSource
+    const queueStates = (
+      await Promise.all(
+        dataSources.map(async (ds) => {
+          const items = await this.getPreAggregationQueueStates(ds);
+          return items.map((it: any) => ({ ...it, dataSource: ds }));
+        })
+      )
+    ).flat();
+
+    // Map queue -> scheduled/processing
+    const queueStatuses = queueStates.map((it: any) => {
+      const raw = Array.isArray(it.status)
+        ? it.status[0]
+        : String(it.status ?? "n/a");
+      const status =
+        raw === "toProcess"
+          ? "scheduled"
+          : raw === "active"
+          ? "processing"
+          : raw;
+      return {
+        status:
+          status === "scheduled" || status === "processing"
+            ? status
+            : "scheduled",
+        dataSource: it.dataSource,
+        preAggregationId: it?.query?.preAggregation?.preAggregationId,
+        tableName: it?.query?.newVersionEntry?.table_name,
+        requestId: it?.query?.requestId,
+      };
+    });
+
+    // 2) Partitions & versions (présence => done), en respectant timezones / dataSources / preAggregations
+    const parts = await this.expandPartitionsInPreAggregations({
+      timezones,
+      dataSources,
+      preAggregations, // [{ id }]
+    });
+
+    const versionEntries = await this.getPreAggregationVersionEntries(
+      parts, // [{ preAggregation, partitions }]
+      preAggregationsSchema,
+      requestId
+    );
+
+    const doneStatuses = parts.map((p: any) => {
+      const hasAny = (p.partitions || []).some((part: any) => {
+        const arr =
+          versionEntries?.versionEntriesByTableName?.[part?.tableName] || [];
+        return Array.isArray(arr) && arr.length > 0;
+      });
+      return {
+        status: hasAny ? "done" : "not_built",
+        dataSource: p?.preAggregation?.preAggregation?.dataSource,
+        preAggregationId: p?.preAggregation?.preAggregation?.id,
+      };
+    });
+
+    // 3) Fusionner queueStatuses (processing > scheduled) et done/not_built par (ds, preAggId, tableName?)
+    const precedence: Record<string, number> = {
+      processing: 3,
+      scheduled: 2,
+      done: 1,
+      not_built: 0,
+    };
+
+    const byKey = new Map<
+      string,
+      {
+        status: "scheduled" | "processing" | "done" | "not_built";
+        dataSource?: string;
+        preAggregationId?: string;
+        tableName?: string;
+        requestId?: string;
+      }
+    >();
+
+    const put = (rec: any) => {
+      const key = [
+        rec.dataSource || "default",
+        rec.preAggregationId || "",
+        rec.tableName || "",
+      ].join("|");
+
+      const prev = byKey.get(key);
+      if (!prev) {
+        byKey.set(key, rec);
+      } else {
+        const p = precedence[prev.status] ?? -1;
+        const c = precedence[rec.status] ?? -1;
+        if (c > p) byKey.set(key, { ...prev, ...rec });
+      }
+    };
+
+    queueStatuses.forEach(put);
+    doneStatuses.forEach(put);
+
+    return Array.from(byKey.values());
+  }
+
+  /**
    * Force reconcile queue logic to be executed.
    */
-  public async forceReconcile(datasource = 'default') {
+  public async forceReconcile(datasource = "default") {
     // pre-aggregations queue reconcile
     const preaggsQueue = await this.preAggregations.getQueue(datasource);
     if (preaggsQueue) {
@@ -166,11 +340,11 @@ export class QueryOrchestrator {
   public async isPartitionExist(
     request: string,
     external: boolean,
-    dataSource = 'default',
+    dataSource = "default",
     schema: string,
     table: string,
     key: any,
-    token: string,
+    token: string
   ): Promise<[boolean, string]> {
     return this.preAggregations.isPartitionExist(
       request,
@@ -179,7 +353,7 @@ export class QueryOrchestrator {
       schema,
       table,
       key,
-      token,
+      token
     );
   }
 
@@ -190,14 +364,12 @@ export class QueryOrchestrator {
    * @throw Error
    */
   public async streamQuery(query: QueryBody): Promise<stream.Transform> {
-    const {
-      preAggregationsTablesToTempTables,
-      values,
-    } = await this.preAggregations.loadAllPreAggregationsIfNeeded(query);
+    const { preAggregationsTablesToTempTables, values } =
+      await this.preAggregations.loadAllPreAggregationsIfNeeded(query);
     query.values = values || query.values;
     const _stream = await this.queryCache.cachedQueryResult(
       query,
-      preAggregationsTablesToTempTables,
+      preAggregationsTablesToTempTables
     );
     return <stream.Transform>_stream;
   }
@@ -210,15 +382,13 @@ export class QueryOrchestrator {
    * @throw ContinueWaitError
    */
   public async fetchQuery(queryBody: QueryBody): Promise<any> {
-    const {
-      preAggregationsTablesToTempTables,
-      values,
-    } = await this.preAggregations.loadAllPreAggregationsIfNeeded(queryBody);
+    const { preAggregationsTablesToTempTables, values } =
+      await this.preAggregations.loadAllPreAggregationsIfNeeded(queryBody);
 
     if (values) {
       queryBody = {
         ...queryBody,
-        values
+        values,
       };
     }
 
@@ -232,18 +402,18 @@ export class QueryOrchestrator {
         targetTableName: pa.targetTableName,
         refreshKeyValues: pa.refreshKeyValues,
         lastUpdatedAt: pa.lastUpdatedAt,
-      })),
+      }))
     )(preAggregationsTablesToTempTables);
 
     if (this.rollupOnlyMode && Object.keys(usedPreAggregations).length === 0) {
       throw new Error(
-        'No pre-aggregation table has been built for this query yet. ' +
-        'Please check your refresh worker configuration if it persists.'
+        "No pre-aggregation table has been built for this query yet. " +
+          "Please check your refresh worker configuration if it persists."
       );
     }
 
     let lastRefreshTimestamp = getLastUpdatedAtTimestamp(
-      preAggregationsTablesToTempTables.map(pa => pa[1].lastUpdatedAt)
+      preAggregationsTablesToTempTables.map((pa) => pa[1].lastUpdatedAt)
     );
 
     if (!queryBody.query) {
@@ -259,7 +429,8 @@ export class QueryOrchestrator {
       } else {
         return {
           usedPreAggregations,
-          lastRefreshTime: lastRefreshTimestamp && new Date(lastRefreshTimestamp),
+          lastRefreshTime:
+            lastRefreshTimestamp && new Date(lastRefreshTimestamp),
         };
       }
     }
@@ -271,7 +442,7 @@ export class QueryOrchestrator {
 
     lastRefreshTimestamp = getLastUpdatedAtTimestamp([
       lastRefreshTimestamp,
-      result.lastRefreshTime?.getTime()
+      result.lastRefreshTime?.getTime(),
     ]);
 
     if (result instanceof QueryStream) {
@@ -298,31 +469,37 @@ export class QueryOrchestrator {
     const preAggregationsQueryStageState = async (dataSource) => {
       if (!preAggregationsQueryStageStateByDataSource[dataSource]) {
         const queue = await this.preAggregations.getQueue(dataSource);
-        preAggregationsQueryStageStateByDataSource[dataSource] = queue.fetchQueryStageState();
+        preAggregationsQueryStageStateByDataSource[dataSource] =
+          queue.fetchQueryStageState();
       }
       return preAggregationsQueryStageStateByDataSource[dataSource];
     };
 
-    const pendingPreAggregationIndex =
-      (await Promise.all(
-        (queryBody.preAggregations || [])
-          .map(async p => {
-            const queue = await this.preAggregations.getQueue(p.dataSource);
-            return queue.getQueryStage(
-              PreAggregations.preAggregationQueryCacheKey(p),
-              10,
-              await preAggregationsQueryStageState(p.dataSource),
-            );
-          })
-      )).findIndex(p => !!p);
+    const pendingPreAggregationIndex = (
+      await Promise.all(
+        (queryBody.preAggregations || []).map(async (p) => {
+          const queue = await this.preAggregations.getQueue(p.dataSource);
+          return queue.getQueryStage(
+            PreAggregations.preAggregationQueryCacheKey(p),
+            10,
+            await preAggregationsQueryStageState(p.dataSource)
+          );
+        })
+      )
+    ).findIndex((p) => !!p);
 
     if (pendingPreAggregationIndex === -1) {
       const qcQueue = await this.queryCache.getQueue(queryBody.dataSource);
-      return qcQueue.getQueryStage(QueryCache.queryCacheKey(queryBody) as QueryKey);
+      return qcQueue.getQueryStage(
+        QueryCache.queryCacheKey(queryBody) as QueryKey
+      );
     }
 
-    const preAggregation = queryBody.preAggregations[pendingPreAggregationIndex];
-    const paQueue = await this.preAggregations.getQueue(preAggregation.dataSource);
+    const preAggregation =
+      queryBody.preAggregations[pendingPreAggregationIndex];
+    const paQueue = await this.preAggregations.getQueue(
+      preAggregation.dataSource
+    );
     const preAggregationStage = await paQueue.getQueryStage(
       PreAggregations.preAggregationQueryCacheKey(preAggregation),
       undefined,
@@ -331,10 +508,14 @@ export class QueryOrchestrator {
     if (!preAggregationStage) {
       return undefined;
     }
-    const stageMessage =
-      `Building pre-aggregation ${pendingPreAggregationIndex + 1}/${queryBody.preAggregations.length}`;
-    if (preAggregationStage.stage.indexOf('queue') !== -1) {
-      return { ...preAggregationStage, stage: `${stageMessage}: ${preAggregationStage.stage}` };
+    const stageMessage = `Building pre-aggregation ${
+      pendingPreAggregationIndex + 1
+    }/${queryBody.preAggregations.length}`;
+    if (preAggregationStage.stage.indexOf("queue") !== -1) {
+      return {
+        ...preAggregationStage,
+        stage: `${stageMessage}: ${preAggregationStage.stage}`,
+      };
     } else {
       return { ...preAggregationStage, stage: stageMessage };
     }
@@ -359,28 +540,32 @@ export class QueryOrchestrator {
   }
 
   public async getPreAggregationVersionEntries(
-    preAggregations: { preAggregation: any, partitions: any[]}[],
+    preAggregations: { preAggregation: any; partitions: any[] }[],
     preAggregationsSchema: string,
-    requestId: string,
+    requestId: string
   ) {
     const versionEntries = await this.preAggregations.getVersionEntries(
-      preAggregations.map(p => {
+      preAggregations.map((p) => {
         const { preAggregation } = p.preAggregation;
         const partition = p.partitions[0];
-        preAggregation.dataSource = partition?.dataSource || 'default';
+        preAggregation.dataSource = partition?.dataSource || "default";
         preAggregation.preAggregationsSchema = preAggregationsSchema;
         return preAggregation;
       }),
       requestId
     );
 
-    const flatFn = (arrResult: any[], arrItem: any[]) => ([...arrResult, ...arrItem]);
+    const flatFn = (arrResult: any[], arrItem: any[]) => [
+      ...arrResult,
+      ...arrItem,
+    ];
     const structureVersionsByTableName = preAggregations
-      .map(p => p.partitions)
+      .map((p) => p.partitions)
       .reduce(flatFn, [])
       .reduce((obj, partition) => {
         if (partition) {
-          obj[partition.tableName] = PreAggregations.structureVersion(partition);
+          obj[partition.tableName] =
+            PreAggregations.structureVersion(partition);
         }
         return obj;
       }, {});
@@ -390,18 +575,25 @@ export class QueryOrchestrator {
       versionEntriesByTableName: versionEntries
         .reduce(flatFn, [])
         .filter((versionEntry) => {
-          const structureVersion = structureVersionsByTableName[versionEntry.table_name];
-          return structureVersion && versionEntry.structure_version === structureVersion;
+          const structureVersion =
+            structureVersionsByTableName[versionEntry.table_name];
+          return (
+            structureVersion &&
+            versionEntry.structure_version === structureVersion
+          );
         })
         .reduce((obj, versionEntry) => {
           if (!obj[versionEntry.table_name]) obj[versionEntry.table_name] = [];
           obj[versionEntry.table_name].push(versionEntry);
           return obj;
-        }, {})
+        }, {}),
     };
   }
 
-  public async getPreAggregationPreview(requestId: string, preAggregation: PreAggregationDescription) {
+  public async getPreAggregationPreview(
+    requestId: string,
+    preAggregation: PreAggregationDescription
+  ) {
     if (!preAggregation) return [];
     const [query] = preAggregation.previewSql;
     const { external } = preAggregation;
@@ -411,9 +603,7 @@ export class QueryOrchestrator {
       continueWait: true,
       query,
       external,
-      preAggregations: [
-        preAggregation
-      ],
+      preAggregations: [preAggregation],
       requestId,
     });
 
@@ -428,11 +618,14 @@ export class QueryOrchestrator {
     return this.preAggregations.checkPartitionsBuildRangeCache(queryBody);
   }
 
-  public async getPreAggregationQueueStates(dataSource = 'default') {
+  public async getPreAggregationQueueStates(dataSource = "default") {
     return this.preAggregations.getQueueState(dataSource);
   }
 
-  public async cancelPreAggregationQueriesFromQueue(queryKeys: string[], dataSource = 'default') {
+  public async cancelPreAggregationQueriesFromQueue(
+    queryKeys: string[],
+    dataSource = "default"
+  ) {
     return this.preAggregations.cancelQueriesFromQueue(queryKeys, dataSource);
   }
 
@@ -440,31 +633,30 @@ export class QueryOrchestrator {
     return this.preAggregations.updateRefreshEndReached();
   }
 
-  private createMetadataQuery(operation: string, params: Record<string, any>): QueryWithParams {
+  private createMetadataQuery(
+    operation: string,
+    params: Record<string, any>
+  ): QueryWithParams {
     return [
       `METADATA:${operation}`,
       // TODO (@MikeNitsenko): Metadata queries need object params like [{ schema, table }]
       // but QueryWithParams expects string[]. This forces JSON.stringify workaround.
       [JSON.stringify(params)],
-      { external: false }
+      { external: false },
     ];
   }
 
   private async queryDataSourceMetadata<T>(
     operation: MetadataOperationType,
     params: Record<string, any>,
-    dataSource: string = 'default',
+    dataSource: string = "default",
     options: {
       requestId?: string;
       syncJobId?: string;
       expiration?: number;
     } = {}
   ): Promise<T> {
-    const {
-      requestId,
-      syncJobId,
-      expiration = 30 * 24 * 60 * 60,
-    } = options;
+    const { requestId, syncJobId, expiration = 30 * 24 * 60 * 60 } = options;
 
     const metadataQuery = this.createMetadataQuery(operation, params);
     const cacheKey: CacheKey = syncJobId
@@ -489,7 +681,7 @@ export class QueryOrchestrator {
    * Query the data source for available schemas.
    */
   public async queryDataSourceSchemas(
-    dataSource: string = 'default',
+    dataSource: string = "default",
     options: {
       requestId?: string;
       syncJobId?: string;
@@ -509,7 +701,7 @@ export class QueryOrchestrator {
    */
   public async queryTablesForSchemas(
     schemas: QuerySchemasResult[],
-    dataSource: string = 'default',
+    dataSource: string = "default",
     options: {
       requestId?: string;
       syncJobId?: string;
@@ -529,7 +721,7 @@ export class QueryOrchestrator {
    */
   public async queryColumnsForTables(
     tables: QueryTablesResult[],
-    dataSource: string = 'default',
+    dataSource: string = "default",
     options: {
       requestId?: string;
       syncJobId?: string;
