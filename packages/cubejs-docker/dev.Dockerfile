@@ -22,12 +22,18 @@ WORKDIR /src
 # On copie TOUT le repo (les dossiers rust/ sont requis par les postinstall)
 COPY . .
 
-# Yarn v1 + timeout réseau
-RUN yarn policies set-version v1.22.22 && yarn config set network-timeout 120000 -g
+# --- Yarn 3 (Corepack) ---
+# On active Corepack et on s'assure d'utiliser exactement Yarn 3.6.4
+RUN corepack enable && corepack prepare yarn@3.6.4 --activate
+# (optionnel) Timeout réseau global Yarn 3
+RUN yarn config set --home networkTimeout 120000
+
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
-RUN corepack enable
+# Vérification de la version -> doit afficher 3.6.4
 RUN yarn --version
+
+# Install stricte (équivalent de --frozen-lockfile pour Yarn moderne)
 RUN yarn install --immutable
 
 # (Optionnel) Build global du monorepo (lerna/Nx)
