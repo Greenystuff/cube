@@ -341,24 +341,39 @@ export class OrchestratorApi {
   }
 
   /**
-   * Abonnement aux évènements de jobs de pré-agrégation (scheduled/processing/done/failure/canceled)
-   * émis par l’orchestrateur (relayés depuis les QueryQueue).
+   * Abonnement aux évènements de jobs de pré-agrégation.
+   * Retourne une fonction d’unsubscribe à appeler quand tu veux te désinscrire.
    */
-  public onPreAggregationJobEvent(
+  public async onPreAggregationJobEvent(
     listener: (e: PreAggJobEvent) => void,
     dataSource: string = "default"
-  ): Promise<void> {
-    return (this.orchestrator as any).onPreAggregationJobEvent(listener, dataSource);
+  ): Promise<() => void> {
+    const fn = (this.orchestrator as any).onPreAggregationJobEvent;
+    if (typeof fn !== "function") {
+      throw new Error(
+        "QueryOrchestrator.onPreAggregationJobEvent est indisponible (patch manquant ?)"
+      );
+    }
+    // Le QueryOrchestrator renvoie déjà un off(): ()=>void
+    const off: () => void = await fn.call(
+      this.orchestrator,
+      listener,
+      dataSource
+    );
+    return off;
   }
 
   /**
-   * Désabonnement aux évènements de jobs de pré-agrégation.
+   * Variante pratique pour se désabonner via la même signature.
+   * (Optionnelle si tu utilises la fonction retournée par onPreAggregationJobEvent.)
    */
-  public offPreAggregationJobEvent(
+  public async offPreAggregationJobEvent(
     listener: (e: PreAggJobEvent) => void,
     dataSource: string = "default"
   ): Promise<void> {
-    return (this.orchestrator as any).offPreAggregationJobEvent(listener, dataSource);
+    const fn = (this.orchestrator as any).offPreAggregationJobEvent;
+    if (typeof fn !== "function") return;
+    await fn.call(this.orchestrator, listener, dataSource);
   }
 
   /**
