@@ -18,6 +18,19 @@ export interface OrchestratorApiOptions extends QueryOrchestratorOptions {
   redisPrefix?: string;
 }
 
+// Évènement émis par la QueryQueue pour les pré-agrégations
+export type PreAggJobEvent = {
+  type: 'scheduled' | 'processing' | 'done' | 'failure' | 'canceled';
+  dataSource?: string;
+  requestId?: string;
+  queueId?: number | null;
+  preAggregationId?: string;
+  newVersionEntry?: any;
+  preAggregation?: any;
+  addedToQueueTime?: number;
+  error?: string;
+};
+
 export class OrchestratorApi {
   private seenDataSources: Record<string, boolean> = {};
 
@@ -33,7 +46,7 @@ export class OrchestratorApi {
     this.continueWaitTimeout = this.options.continueWaitTimeout || 5;
 
     this.orchestrator = new QueryOrchestrator(
-      options.redisPrefix || 'STANDALONE',
+      options.redisPrefix || "STANDALONE",
       driverFactory,
       logger,
       options
@@ -50,7 +63,7 @@ export class OrchestratorApi {
   /**
    * Force reconcile queue logic to be executed.
    */
-  public async forceReconcile(datasource = 'default') {
+  public async forceReconcile(datasource = "default") {
     await this.orchestrator.forceReconcile(datasource);
   }
 
@@ -71,14 +84,14 @@ export class OrchestratorApi {
    * error otherwise.
    */
   public async executeQuery(query: QueryBody) {
-    const queryForLog = query.query?.replace(/\s+/g, ' ');
-    const startQueryTime = (new Date()).getTime();
+    const queryForLog = query.query?.replace(/\s+/g, " ");
+    const startQueryTime = new Date().getTime();
 
     try {
-      this.logger('Query started', {
+      this.logger("Query started", {
         query: queryForLog,
         params: query.values,
-        requestId: query.requestId
+        requestId: query.requestId,
       });
 
       let fetchQueryPromise = query.loadRefreshKeysOnly
@@ -93,15 +106,18 @@ export class OrchestratorApi {
         return job;
       }
 
-      fetchQueryPromise = pt.timeout(fetchQueryPromise, this.continueWaitTimeout * 1000);
+      fetchQueryPromise = pt.timeout(
+        fetchQueryPromise,
+        this.continueWaitTimeout * 1000
+      );
 
       const data = await fetchQueryPromise;
 
-      this.logger('Query completed', {
-        duration: ((new Date()).getTime() - startQueryTime),
+      this.logger("Query completed", {
+        duration: new Date().getTime() - startQueryTime,
         query: queryForLog,
         params: query.values,
-        requestId: query.requestId
+        requestId: query.requestId,
       });
 
       if (Array.isArray(data)) {
@@ -120,49 +136,46 @@ export class OrchestratorApi {
 
       return data;
     } catch (err) {
-      if ((err instanceof pt.TimeoutError || err instanceof ContinueWaitError)) {
-        this.logger('Continue wait', {
-          duration: ((new Date()).getTime() - startQueryTime),
+      if (err instanceof pt.TimeoutError || err instanceof ContinueWaitError) {
+        this.logger("Continue wait", {
+          duration: new Date().getTime() - startQueryTime,
           query: queryForLog,
           params: query.values,
-          requestId: query.requestId
+          requestId: query.requestId,
         });
 
-        const fromCache = await this
-          .orchestrator
-          .resultFromCacheIfExists(query);
-        if (
-          !query.renewQuery &&
-          fromCache &&
-          !query.scheduledRefresh
-        ) {
-          this.logger('Slow Query Warning', {
+        const fromCache = await this.orchestrator.resultFromCacheIfExists(
+          query
+        );
+        if (!query.renewQuery && fromCache && !query.scheduledRefresh) {
+          this.logger("Slow Query Warning", {
             query: queryForLog,
             requestId: query.requestId,
-            warning: 'Query is too slow to be renewed during the ' +
-              'user request and was served from the cache. Please ' +
-              'consider using low latency pre-aggregations.'
+            warning:
+              "Query is too slow to be renewed during the " +
+              "user request and was served from the cache. Please " +
+              "consider using low latency pre-aggregations.",
           });
 
           return {
             ...fromCache,
-            slowQuery: true
+            slowQuery: true,
           };
         }
 
         throw {
-          error: 'Continue wait',
+          error: "Continue wait",
           stage: !query.scheduledRefresh
             ? await this.orchestrator.queryStage(query)
-            : null
+            : null,
         };
       }
 
-      this.logger('Error querying db', {
+      this.logger("Error querying db", {
         query: queryForLog,
         params: query.values,
-        error: ((err as Error).stack || err),
-        requestId: query.requestId
+        error: (err as Error).stack || err,
+        requestId: query.requestId,
       });
 
       throw { error: err.toString() };
@@ -180,14 +193,20 @@ export class OrchestratorApi {
   public async testConnection() {
     if (this.options.rollupOnlyMode) {
       return Promise.all([
-        this.testDriverConnection(this.options.externalDriverFactory, DriverType.External),
+        this.testDriverConnection(
+          this.options.externalDriverFactory,
+          DriverType.External
+        ),
       ]);
     } else {
       return Promise.all([
-        ...Object.keys(this.seenDataSources).map(
-          ds => this.testDriverConnection(this.driverFactory, DriverType.Internal, ds),
+        ...Object.keys(this.seenDataSources).map((ds) =>
+          this.testDriverConnection(this.driverFactory, DriverType.Internal, ds)
         ),
-        this.testDriverConnection(this.options.externalDriverFactory, DriverType.External),
+        this.testDriverConnection(
+          this.options.externalDriverFactory,
+          DriverType.External
+        ),
       ]);
     }
   }
@@ -199,13 +218,13 @@ export class OrchestratorApi {
   public async testDriverConnection(
     driverFn?: DriverFactoryByDataSource,
     driverType?: DriverType,
-    dataSource: string = 'default',
+    dataSource: string = "default"
   ) {
     if (driverFn) {
       try {
         const driver = await driverFn(dataSource);
         await driver.testConnection();
-        this.logger('Connection test completed successfully', {
+        this.logger("Connection test completed successfully", {
           driverType,
           dataSource,
         });
@@ -222,11 +241,11 @@ export class OrchestratorApi {
   public async isPartitionExist(
     request: string,
     external: boolean,
-    dataSource = 'default',
+    dataSource = "default",
     schema: string,
     table: string,
     key: any,
-    token: string,
+    token: string
   ): Promise<[boolean, string]> {
     return this.orchestrator.isPartitionExist(
       request,
@@ -235,19 +254,24 @@ export class OrchestratorApi {
       schema,
       table,
       key,
-      token,
+      token
     );
   }
 
   public async release() {
     return Promise.all([
-      ...Object.keys(this.seenDataSources).map(ds => this.releaseDriver(this.driverFactory, ds)),
+      ...Object.keys(this.seenDataSources).map((ds) =>
+        this.releaseDriver(this.driverFactory, ds)
+      ),
       this.releaseDriver(this.options.externalDriverFactory),
-      this.orchestrator.cleanup()
+      this.orchestrator.cleanup(),
     ]);
   }
 
-  protected async releaseDriver(driverFn?: DriverFactoryByDataSource, dataSource: string = 'default') {
+  protected async releaseDriver(
+    driverFn?: DriverFactoryByDataSource,
+    dataSource: string = "default"
+  ) {
     if (driverFn) {
       const driver = await driverFn(dataSource);
       if (driver.release) {
@@ -260,7 +284,11 @@ export class OrchestratorApi {
     this.seenDataSources[dataSource] = true;
   }
 
-  public getPreAggregationVersionEntries(context: RequestContext, preAggregations, preAggregationsSchema) {
+  public getPreAggregationVersionEntries(
+    context: RequestContext,
+    preAggregations,
+    preAggregationsSchema
+  ) {
     return this.orchestrator.getPreAggregationVersionEntries(
       preAggregations,
       preAggregationsSchema,
@@ -269,16 +297,21 @@ export class OrchestratorApi {
   }
 
   public getPreAggregationPreview(context: RequestContext, preAggregation) {
-    return this.orchestrator.getPreAggregationPreview(context.requestId, preAggregation);
+    return this.orchestrator.getPreAggregationPreview(
+      context.requestId,
+      preAggregation
+    );
   }
 
   public async expandPartitionsInPreAggregations(queryBody) {
     try {
-      return await this.orchestrator.expandPartitionsInPreAggregations(queryBody);
+      return await this.orchestrator.expandPartitionsInPreAggregations(
+        queryBody
+      );
     } catch (err) {
       if (err instanceof ContinueWaitError) {
         throw {
-          error: 'Continue wait'
+          error: "Continue wait",
         };
       }
       throw err;
@@ -293,11 +326,53 @@ export class OrchestratorApi {
     return this.orchestrator.getPreAggregationQueueStates();
   }
 
-  public async cancelPreAggregationQueriesFromQueue(queryKeys: string[], dataSource: string) {
-    return this.orchestrator.cancelPreAggregationQueriesFromQueue(queryKeys, dataSource);
+  public async cancelPreAggregationQueriesFromQueue(
+    queryKeys: string[],
+    dataSource: string
+  ) {
+    return this.orchestrator.cancelPreAggregationQueriesFromQueue(
+      queryKeys,
+      dataSource
+    );
   }
 
   public async updateRefreshEndReached() {
     return this.orchestrator.updateRefreshEndReached();
+  }
+
+  /**
+   * Abonnement aux évènements de jobs de pré-agrégation (scheduled/processing/done/failure/canceled)
+   * émis par l’orchestrateur (relayés depuis les QueryQueue).
+   */
+  public onPreAggregationJobEvent(
+    listener: (e: PreAggJobEvent) => void,
+    dataSource: string = "default"
+  ): Promise<void> {
+    return (this.orchestrator as any).onPreAggregationJobEvent(listener, dataSource);
+  }
+
+  /**
+   * Désabonnement aux évènements de jobs de pré-agrégation.
+   */
+  public offPreAggregationJobEvent(
+    listener: (e: PreAggJobEvent) => void,
+    dataSource: string = "default"
+  ): Promise<void> {
+    return (this.orchestrator as any).offPreAggregationJobEvent(listener, dataSource);
+  }
+
+  /**
+   * Listing exhaustif des pré-agrégations et de leur statut courant, sans lancer de build.
+   * Combine la queue (scheduled/processing) + la présence de versions (done) ; sinon not_built.
+   * Nécessite le preAggregationsSchema (du compiler) et un requestId pour le tracing.
+   */
+  public listAllPreAggregationsWithStatus(params: {
+    timezones?: string[];
+    dataSources?: string[];
+    preAggregations?: { id: string }[];
+    preAggregationsSchema: string;
+    requestId: string;
+  }) {
+    return (this.orchestrator as any).listAllPreAggregationsWithStatus(params);
   }
 }
