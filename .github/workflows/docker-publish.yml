@@ -85,8 +85,8 @@ jobs:
       - name: Build & Push (amd64)
         uses: docker/build-push-action@v6
         with:
-          context: ${{ env.BUILD_CONTEXT }}         # toujours la racine (dev.Dockerfile a besoin du repo complet)
-          file: ${{ env.DOCKERFILE_PATH }}          # chemin détecté
+          context: .
+          file: packages/cubejs-docker/dev.Dockerfile
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
