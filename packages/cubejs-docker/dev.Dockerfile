@@ -26,8 +26,7 @@ COPY . .
 RUN corepack enable && corepack prepare yarn@3.6.4 --activate
 RUN yarn --version
 
-# 🔒 On écrase (dans l'image) un .yarnrc.yml potentiellement invalide du repo
-# -> ça n'affecte PAS ton repo, juste l'environnement de build Docker
+# 🔒 Force un .yarnrc.yml sain (dans l'image uniquement)
 RUN printf '%s\n' \
   'nodeLinker: node-modules' \
   'enableGlobalCache: false' \
@@ -36,8 +35,19 @@ RUN printf '%s\n' \
 
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
-# Install stricte (équivalent --frozen-lockfile). Yarn 3 migre le lock Yarn 1 s'il le voit.
-RUN yarn install --immutable
+# Install:
+# - Si lockfile Berry (>= Yarn 2): install immutable directe
+# - Sinon (lock Yarn 1): première install pour migrer, puis install immutable
+RUN set -eux; \
+  if grep -q "__metadata" yarn.lock >/dev/null 2>&1; then \
+    echo "Berry lockfile détecté -> installation immutable"; \
+    yarn install --immutable; \
+  else \
+    echo "Lockfile Yarn 1 détecté -> migration initiale"; \
+    yarn install; \
+    echo "Vérification immutable"; \
+    yarn install --immutable; \
+  fi
 
 # (Optionnel) Build global du monorepo (lerna/Nx)
 RUN yarn build || true
