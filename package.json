@@ -1,7 +1,6 @@
 {
   "name": "cubejs",
   "version": "0.1.0",
-  "description": "",
   "private": true,
   "workspaces": {
     "packages": [
@@ -24,17 +23,13 @@
     "tsc:watch": "tsc --build --watch",
     "clean": "rimraf packages/*/{tsconfig.tsbuildinfo,lib,dist}"
   },
-  "author": "Cube Dev, Inc.",
   "dependencies": {
     "core-js": "^3.34.0",
-    "express": "^5.1.0",
-    "lerna": "^8.2.2"
+    "express": "^4.18.3"
   },
-  "files": [
-    "src",
-    "dist"
-  ],
   "devDependencies": {
+    "lerna": "^8.2.2",
+    "@types/express": "^4.17.23",
     "@babel/core": "^7.13.8",
     "@babel/plugin-transform-runtime": "^7.13.9",
     "@babel/preset-env": "^7.13.9",
@@ -46,9 +41,9 @@
     "@rollup/plugin-commonjs": "^17.1.0",
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^11.2.0",
-    "@types/express": "^4.17.23",
     "@types/fs-extra": "^9.0.1",
     "@types/jest": "^27",
+    "@types/ramda": "0.27.40",
     "@typescript-eslint/eslint-plugin": "^6.12.0",
     "flush-promises": "^1.0.2",
     "husky": "^5.0.4",
@@ -63,17 +58,14 @@
     "rollup-plugin-tsconfig-paths": "^1.5.2",
     "typescript": "~5.2.2"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/cube-js/cube.git"
-  },
   "resolutions": {
     "es5-ext": "0.10.53",
     "lodash": "^4.17.0",
     "@types/node": "^20",
-    "@types/ramda": "0.27.40",
     "thrift": "0.20.0"
   },
-  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "packageManager": "yarn@3.6.4"
 }

@@ -1,4 +1,3 @@
-# packages/cubejs-docker/dev.Dockerfile
 # Build "classique" depuis les sources, avec garde-fou pour le CLI
 
 FROM node:22.18.0-bookworm-slim AS build
@@ -23,16 +22,27 @@ WORKDIR /src
 COPY . .
 
 # --- Yarn 3 (Corepack) ---
+# Utilise la version déclarée dans package.json ("packageManager": "yarn@3.6.4")
+# et force le linker node-modules pour compat monorepo/lerna & native deps.
 RUN corepack enable && corepack prepare yarn@3.6.4 --activate
-# (si ton package.json a déjà "packageManager": "yarn@3.6.4", Corepack utilisera cette version)
-
+ENV YARN_NODE_LINKER=node-modules
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
 # Vérification de la version -> doit afficher 3.6.4
 RUN yarn --version
 
-# Install stricte (équivalent --frozen-lockfile)
-RUN yarn install --immutable
+# Installation avec migration automatique :
+# - Si yarn.lock est déjà au format Yarn Berry (contient "__metadata") -> install --immutable
+# - Sinon (lock Yarn 1) -> première install (migration), puis install --immutable
+RUN set -eux; \
+  if grep -q "__metadata" yarn.lock >/dev/null 2>&1; then \
+    echo "Berry lockfile détecté -> installation immutable"; \
+    yarn install --immutable; \
+  else \
+    echo "Lockfile Yarn 1 détecté -> migration initiale"; \
+    yarn install; \
+    yarn install --immutable; \
+  fi
 
 # (Optionnel) Build global du monorepo (lerna/Nx)
 RUN yarn build || true
